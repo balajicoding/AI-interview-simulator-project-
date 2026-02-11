@@ -1,8 +1,7 @@
 
 /**
  * Simulated MongoDB Service
- * In a production app, these functions would perform `fetch` calls 
- * to a FastAPI/Node.js backend connected to MongoDB.
+ * Updated to handle hashed passwords and account recovery.
  */
 
 import { InterviewSession } from '../types';
@@ -24,21 +23,33 @@ export interface UserProfile {
   avatar: string;
 }
 
-const DEFAULT_PROFILE: UserProfile = {
-  id: 'user_1',
-  name: 'John Doe',
-  email: 'john@example.com',
-  headline: 'Final Year CS Student',
-  skills: ['Java', 'React', 'Python'],
-  bio: 'Passionate about building scalable AI-driven applications.',
-  avatar: '👨‍💻'
-};
+export interface AuthUser {
+  id: string;
+  email: string;
+  passwordHash: string;
+}
 
 export const db = {
+  // Utility to hash passwords using SHA-256
+  async hashPassword(password: string): Promise<string> {
+    const msgUint8 = new TextEncoder().encode(password);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  },
+
   // Profile Methods
   async getProfile(userId: string): Promise<UserProfile> {
     const data = localStorage.getItem(`${STORAGE_KEYS.USER_PROFILE}_${userId}`);
-    return data ? JSON.parse(data) : { ...DEFAULT_PROFILE, id: userId };
+    return data ? JSON.parse(data) : {
+      id: userId,
+      name: 'User',
+      email: '',
+      headline: 'Candidate',
+      skills: [],
+      bio: '',
+      avatar: '👤'
+    };
   },
 
   async updateProfile(profile: UserProfile): Promise<UserProfile> {
@@ -58,9 +69,29 @@ export const db = {
     return data ? JSON.parse(data) : [];
   },
 
-  // Auth Simulation
-  async getUsers() {
+  // Auth Methods
+  async getUsers(): Promise<AuthUser[]> {
     const data = localStorage.getItem(STORAGE_KEYS.AUTH_USERS);
     return data ? JSON.parse(data) : [];
+  },
+
+  async saveUser(user: AuthUser) {
+    const users = await this.getUsers();
+    const index = users.findIndex(u => u.email === user.email);
+    if (index > -1) {
+      users[index] = user;
+    } else {
+      users.push(user);
+    }
+    localStorage.setItem(STORAGE_KEYS.AUTH_USERS, JSON.stringify(users));
+  },
+
+  async updatePassword(email: string, newPasswordHash: string): Promise<void> {
+    const users = await this.getUsers();
+    const user = users.find(u => u.email === email);
+    if (user) {
+      user.passwordHash = newPasswordHash;
+      localStorage.setItem(STORAGE_KEYS.AUTH_USERS, JSON.stringify(users));
+    }
   }
 };

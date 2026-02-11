@@ -2,7 +2,8 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { InterviewConfig, Question, EvaluationResult } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+// Always use process.env.API_KEY directly as a named parameter.
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export const audioUtils = {
   decodeBase64(base64: string): Uint8Array {
@@ -67,6 +68,7 @@ export const geminiService = {
       }
     });
 
+    // Directly access text as a property.
     const data = JSON.parse(response.text || "[]");
     return data.map((q: any, index: number) => ({
       id: index + 1,
@@ -116,6 +118,7 @@ export const geminiService = {
       }
     });
 
+    // Directly access text property.
     return JSON.parse(response.text || "{}");
   },
 
