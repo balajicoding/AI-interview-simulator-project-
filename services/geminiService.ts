@@ -2,7 +2,8 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { InterviewConfig, Question, EvaluationResult } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 const COMPONENT_MODEL = "gemini-3-flash-preview";
 const TTS_MODEL = "gemini-2.5-flash-preview-tts";
 
@@ -55,6 +56,16 @@ export const audioUtils = {
 
 export const geminiService = {
   async generateQuestions(config: InterviewConfig): Promise<Question[]> {
+    if (!ai) {
+      return [
+        { id: 1, text: "Tell me about yourself.", category: "HR" },
+        { id: 2, text: `Why do you want to work at ${config.company}?`, category: "HR" },
+        { id: 3, text: `Explain a challenging project you handled as a ${config.role}.`, category: "Technical" },
+        { id: 4, text: "How do you debug production issues under pressure?", category: "Technical" },
+        { id: 5, text: "What are your strengths and one area you are improving?", category: "HR" }
+      ];
+    }
+
     return withRetry(async () => {
       const prompt = `Senior hiring manager at ${config.company}. 5 questions for ${config.role} (${config.experience}). JSON format: {questions: [{text, category}]}. First must be "Tell me about yourself".`;
 
@@ -93,6 +104,25 @@ export const geminiService = {
   },
 
   async evaluateAnswer(question: string, answer: string, config: InterviewConfig): Promise<EvaluationResult> {
+    if (!ai) {
+      const lengthScore = Math.min(10, Math.max(4, Math.floor(answer.trim().length / 40)));
+      const technical = /system|design|api|database|algorithm|testing|debug|performance/i.test(answer) ? Math.min(10, lengthScore + 1) : Math.max(4, lengthScore - 1);
+      return {
+        relevance: lengthScore,
+        clarity: Math.max(4, lengthScore - 1),
+        confidence: Math.max(4, lengthScore - 1),
+        technical_depth: technical,
+        sentiment: "neutral",
+        overall_score: Math.round(((lengthScore + Math.max(4, lengthScore - 1) + Math.max(4, lengthScore - 1) + technical) / 40) * 100),
+        feedback: "Running in local mock mode because GEMINI_API_KEY is not configured. Your answer has a good start; add more concrete examples and measurable outcomes.",
+        improvement_tips: [
+          "Use STAR format (Situation, Task, Action, Result).",
+          `Tie your answer to ${config.role} responsibilities.`,
+          "Add one metric (latency, revenue, bug reduction, etc.)."
+        ]
+      };
+    }
+
     return withRetry(async () => {
       const prompt = `Evaluate answer for ${config.role} at ${config.company}: Q: "${question}" A: "${answer}". Metrics 1-10, Overall 1-100, Sentiment, Feedback, Tips. Return JSON.`;
 
@@ -123,6 +153,8 @@ export const geminiService = {
   },
 
   async generateSpeech(text: string): Promise<string | undefined> {
+    if (!ai) return undefined;
+
     try {
       const response = await ai.models.generateContent({
         model: TTS_MODEL,

@@ -1,4 +1,3 @@
-
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { db, UserProfile } from '../services/databaseService';
 import { useNotification } from './NotificationContext';
@@ -15,7 +14,14 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const SESSION_KEY = 'hireai_current_session';
+const normalizeEmail = (email: string) => email.trim().toLowerCase();
+
+const generateUserId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return Date.now().toString();
+};
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
@@ -25,15 +31,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Load session on mount
   useEffect(() => {
     const initAuth = async () => {
-      const savedSession = localStorage.getItem(SESSION_KEY);
-      if (savedSession) {
+      const session = db.getSession();
+      if (session) {
         try {
-          const sessionData = JSON.parse(savedSession);
-          // Re-verify profile with "DB" to ensure data consistency
-          const freshProfile = await db.getProfile(sessionData.id);
+          const freshProfile = await db.getProfile(session.userId);
           setUser(freshProfile);
-        } catch (e) {
-          localStorage.removeItem(SESSION_KEY);
+        } catch {
+          db.clearSession();
         }
       }
       setLoading(false);
@@ -44,21 +48,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (email: string, password: string) => {
     setLoading(true);
     try {
+      const normalizedEmail = normalizeEmail(email);
       const users = await db.getUsers();
-      const found = users.find((u) => u.email.toLowerCase() === email.toLowerCase());
-      
+      const found = users.find((u) => normalizeEmail(u.email) === normalizedEmail);
+
       if (!found) {
-        throw new Error("No account found with this email. Please sign up.");
+        throw new Error('No account found with this email. Please sign up.');
       }
 
       const hash = await db.hashPassword(password);
       if (hash !== found.passwordHash) {
-        throw new Error("Invalid password. Please check your credentials.");
+        throw new Error('Invalid password. Please check your credentials.');
       }
 
       const profile = await db.getProfile(found.id);
       setUser(profile);
-      localStorage.setItem(SESSION_KEY, JSON.stringify(profile));
+      db.saveSession(profile.id);
       showNotification(`Welcome back, ${profile.name}!`, 'success');
     } catch (err: any) {
       showNotification(err.message, 'error');
@@ -71,35 +76,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signup = async (name: string, email: string, password: string) => {
     setLoading(true);
     try {
-      const users = await db.getUsers();
-      if (users.some((u) => u.email.toLowerCase() === email.toLowerCase())) {
-        throw new Error("This email is already registered. Try signing in.");
+      const normalizedEmail = normalizeEmail(email);
+      const normalizedName = name.trim();
+      if (!normalizedName) {
+        throw new Error('Name is required.');
       }
 
-      const id = Date.now().toString();
-      const passwordHash = await db.hashPassword(password);
-      
-      // 1. Save Credentials
-      await db.saveUser({ id, email, passwordHash });
+      const users = await db.getUsers();
+      if (users.some((u) => normalizeEmail(u.email) === normalizedEmail)) {
+        throw new Error('This email is already registered. Try signing in.');
+      }
 
-      // 2. Create and Save Profile
+      const id = generateUserId();
+      const passwordHash = await db.hashPassword(password);
+
+      // 1. Save credentials
+      await db.saveUser({ id, email: normalizedEmail, passwordHash });
+
+      // 2. Create and save profile
       const initialProfile: UserProfile = {
         id,
-        name,
-        email,
+        name: normalizedName,
+        email: normalizedEmail,
         headline: 'Professional Candidate',
         skills: [],
         bio: '',
-        avatar: '👤'
+        avatar: 'U'
       };
-      
+
       await db.updateProfile(initialProfile);
 
-      // 3. Establish Session
+      // 3. Establish session
       setUser(initialProfile);
-      localStorage.setItem(SESSION_KEY, JSON.stringify(initialProfile));
-      
-      showNotification("Account created! Welcome to HireAI.", "success");
+      db.saveSession(initialProfile.id);
+
+      showNotification('Account created! Welcome to HireAI.', 'success');
     } catch (err: any) {
       showNotification(err.message, 'error');
       throw err;
@@ -112,24 +123,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const newHash = await db.hashPassword(newPassword);
       await db.updatePassword(email, newHash);
-      showNotification("Password updated! You can now log in with your new password.", "success");
-    } catch (err: any) {
-      showNotification("Failed to reset password. Please try again.", "error");
+      showNotification('Password updated! You can now log in with your new password.', 'success');
+    } catch {
+      showNotification('Failed to reset password. Please check the email and try again.', 'error');
     }
   };
 
   const logout = () => {
     setUser(null);
-    localStorage.removeItem(SESSION_KEY);
-    showNotification("You have been signed out.", "info");
+    db.clearSession();
+    showNotification('You have been signed out.', 'info');
   };
 
   const refreshProfile = async () => {
-    if (user) {
-      const updated = await db.getProfile(user.id);
-      setUser(updated);
-      localStorage.setItem(SESSION_KEY, JSON.stringify(updated));
-    }
+    if (!user) return;
+    const updated = await db.getProfile(user.id);
+    setUser(updated);
+    db.saveSession(updated.id);
   };
 
   return (
@@ -141,6 +151,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (!context) throw new Error("useAuth must be used within AuthProvider");
+  if (!context) throw new Error('useAuth must be used within AuthProvider');
   return context;
 };

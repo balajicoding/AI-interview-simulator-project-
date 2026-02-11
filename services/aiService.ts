@@ -2,8 +2,8 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { InterviewConfig, Question, EvaluationResult } from "../types";
 
-// Always use process.env.API_KEY directly as a named parameter.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 
 // Using gemini-3-flash-preview for high-speed text tasks and higher free-tier rate limits
 const COMPONENT_MODEL = "gemini-3-flash-preview";
@@ -64,6 +64,16 @@ export const audioUtils = {
 
 export const aiService = {
   async generateQuestions(config: InterviewConfig): Promise<Question[]> {
+    if (!ai) {
+      return [
+        { id: 1, text: "Tell me about yourself.", category: "HR" },
+        { id: 2, text: `Why do you want to work at ${config.company}?`, category: "HR" },
+        { id: 3, text: `Explain a challenging project you handled as a ${config.role}.`, category: "Technical" },
+        { id: 4, text: "How do you debug production issues under pressure?", category: "Technical" },
+        { id: 5, text: "What are your strengths and one area you are improving?", category: "HR" }
+      ];
+    }
+
     return withRetry(async () => {
       const prompt = `Senior Recruiter at ${config.company}. Generate 5 interview questions for ${config.role} (${config.experience}).
       Format: JSON {questions: [{text, category}]}.
@@ -105,6 +115,25 @@ export const aiService = {
   },
 
   async evaluateAnswer(question: string, answer: string, config: InterviewConfig): Promise<EvaluationResult> {
+    if (!ai) {
+      const lengthScore = Math.min(10, Math.max(4, Math.floor(answer.trim().length / 40)));
+      const technical = /system|design|api|database|algorithm|testing|debug|performance/i.test(answer) ? Math.min(10, lengthScore + 1) : Math.max(4, lengthScore - 1);
+      return {
+        relevance: lengthScore,
+        clarity: Math.max(4, lengthScore - 1),
+        confidence: Math.max(4, lengthScore - 1),
+        technical_depth: technical,
+        sentiment: "neutral",
+        overall_score: Math.round(((lengthScore + Math.max(4, lengthScore - 1) + Math.max(4, lengthScore - 1) + technical) / 40) * 100),
+        feedback: "Running in local mock mode because GEMINI_API_KEY is not configured. Your answer has a good start; add more concrete examples and measurable outcomes.",
+        improvement_tips: [
+          "Use STAR format (Situation, Task, Action, Result).",
+          `Tie your answer to ${config.role} responsibilities.`,
+          "Add one metric (latency, revenue, bug reduction, etc.)."
+        ]
+      };
+    }
+
     return withRetry(async () => {
       const prompt = `Evaluate response for ${config.role} at ${config.company}:
       Q: "${question}"
@@ -139,6 +168,8 @@ export const aiService = {
   },
 
   async generateSpeech(text: string): Promise<string | undefined> {
+    if (!ai) return undefined;
+
     try {
       // Use zero retries for speech to ensure instant fallback if API is busy
       const response = await ai.models.generateContent({
@@ -163,6 +194,10 @@ export const aiService = {
   },
 
   async chatWithAI(message: string, history: any[]): Promise<string> {
+    if (!ai) {
+      return "Mock mode is active (no GEMINI_API_KEY). I can still help with interview structure, STAR answers, and technical framing.";
+    }
+
     return withRetry(async () => {
       const response = await ai.models.generateContent({
         model: COMPONENT_MODEL,

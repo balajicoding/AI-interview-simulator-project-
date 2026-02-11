@@ -27,18 +27,25 @@ const ProfilePage: React.FC = () => {
 
   const loadHistory = async () => {
     if (user) {
-      const h = await db.getHistory(user.id);
-      setHistory(h);
+      try {
+        const h = await db.getHistory(user.id);
+        setHistory(h);
+      } catch {
+        setHistory([]);
+      }
     }
   };
 
   const handleSave = async () => {
     if (editedProfile) {
-      setSaving(true);
-      await db.updateProfile(editedProfile);
-      await refreshProfile();
-      setIsEditing(false);
-      setSaving(false);
+      try {
+        setSaving(true);
+        await db.updateProfile(editedProfile);
+        await refreshProfile();
+        setIsEditing(false);
+      } finally {
+        setSaving(false);
+      }
     }
   };
 
@@ -114,7 +121,7 @@ const ProfilePage: React.FC = () => {
                </div>
                <div>
                   <div className="text-2xl font-black text-emerald-500">
-                    {history.length > 0 ? Math.round(history.reduce((a, b) => a + (b.answers.reduce((acc, cur) => acc + (cur.evaluation?.overall_score || 0), 0) / b.answers.length), 0) / history.length) : 0}%
+                    {history.length > 0 ? Math.round(history.reduce((a, b) => a + (b.answers.length > 0 ? b.answers.reduce((acc, cur) => acc + (cur.evaluation?.overall_score || 0), 0) / b.answers.length : 0), 0) / history.length) : 0}%
                   </div>
                   <div className="text-[10px] font-bold text-slate-400 uppercase">Avg Proficiency</div>
                </div>
