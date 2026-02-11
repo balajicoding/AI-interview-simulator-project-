@@ -15,6 +15,14 @@ View your app in AI Studio: https://ai.studio/apps/drive/13fOBwrYcMD2sMHmbj4suVm
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+2. Create `.env.local` with backend AI settings:
+   - Example:
+   - `GROQ_API_KEY=your_key_here`
+   - `GROQ_MODEL=llama-3.3-70b-versatile`
+   - Optional:
+   - `API_PORT=8787`
 3. Run the app:
    `npm run dev`
+   - This starts both:
+   - Frontend (Vite)
+   - Backend API (`/api/interview/questions`, `/api/interview/evaluate`, `/api/interview/chat`)

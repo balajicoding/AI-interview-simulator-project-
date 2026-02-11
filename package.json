@@ -4,17 +4,23 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently -k \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "node server/index.js",
+    "dev:web": "vite",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "recharts": "^3.7.0",
-    "framer-motion": "^12.34.0",
     "@google/genai": "^1.40.0",
-    "react-router-dom": "^7.13.0",
+    "concurrently": "^9.2.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.2.4",
+    "express": "^5.2.1",
+    "framer-motion": "^12.34.0",
+    "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "react": "^19.2.4"
+    "react-router-dom": "^7.13.0",
+    "recharts": "^3.7.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
