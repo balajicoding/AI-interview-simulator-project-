@@ -2,8 +2,25 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { InterviewConfig, Question, EvaluationResult } from "../types";
 
-// Always use process.env.API_KEY directly as a named parameter.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const COMPONENT_MODEL = "gemini-3-flash-preview";
+const TTS_MODEL = "gemini-2.5-flash-preview-tts";
+
+const MAX_RETRIES = 2;
+const INITIAL_BACKOFF = 1000;
+
+async function withRetry<T>(fn: () => Promise<T>, retries = MAX_RETRIES, delay = INITIAL_BACKOFF): Promise<T> {
+  try {
+    return await fn();
+  } catch (error: any) {
+    const isQuotaError = error?.message?.includes('429') || error?.status === 'RESOURCE_EXHAUSTED';
+    if (isQuotaError && retries > 0) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return withRetry(fn, retries - 1, delay * 2);
+    }
+    throw error;
+  }
+}
 
 export const audioUtils = {
   decodeBase64(base64: string): Uint8Array {
@@ -38,104 +55,91 @@ export const audioUtils = {
 
 export const geminiService = {
   async generateQuestions(config: InterviewConfig): Promise<Question[]> {
-    const prompt = `You are a senior hiring manager at ${config.company}. Generate exactly 5 interview questions for a ${config.type} interview for the role of ${config.role}. 
-    Target experience level: ${config.experience}. 
-    Difficulty: ${config.difficulty}.
-    
-    Guidelines:
-    1. If HR or Mixed, the first question MUST ALWAYS be: "Tell me about yourself."
-    2. Questions must be scenario-based, reflecting real-world challenges at ${config.company}. Avoid generic textbook definitions.
-    3. For Technical questions, focus on system architecture, problem-solving, and specific tech stack nuances for ${config.role}.
-    4. If Mixed, alternate strictly between HR and Technical.
-    5. Provide the questions in a strictly valid JSON array format.`;
+    return withRetry(async () => {
+      const prompt = `Senior hiring manager at ${config.company}. 5 questions for ${config.role} (${config.experience}). JSON format: {questions: [{text, category}]}. First must be "Tell me about yourself".`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
+      const response = await ai.models.generateContent({
+        model: COMPONENT_MODEL,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
             type: Type.OBJECT,
             properties: {
-              text: { type: Type.STRING },
-              category: { type: Type.STRING, enum: ["HR", "Technical"] }
+              questions: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    text: { type: Type.STRING },
+                    category: { type: Type.STRING, enum: ["HR", "Technical"] }
+                  },
+                  required: ["text", "category"]
+                }
+              }
             },
-            required: ["text", "category"]
+            required: ["questions"]
           }
         }
-      }
-    });
+      });
 
-    // Directly access text as a property.
-    const data = JSON.parse(response.text || "[]");
-    return data.map((q: any, index: number) => ({
-      id: index + 1,
-      text: q.text,
-      category: q.category
-    }));
+      const data = JSON.parse(response.text || '{"questions": []}');
+      return data.questions.map((q: any, index: number) => ({
+        id: index + 1,
+        text: q.text,
+        category: q.category
+      }));
+    });
   },
 
   async evaluateAnswer(question: string, answer: string, config: InterviewConfig): Promise<EvaluationResult> {
-    const prompt = `Evaluate this interview response semantically. 
-    Role: ${config.role} at ${config.company}
-    Question: "${question}"
-    Candidate Answer: "${answer}"
+    return withRetry(async () => {
+      const prompt = `Evaluate answer for ${config.role} at ${config.company}: Q: "${question}" A: "${answer}". Metrics 1-10, Overall 1-100, Sentiment, Feedback, Tips. Return JSON.`;
 
-    Scoring Rules:
-    - DO NOT score based on answer length.
-    - Relevance: Does the answer address the core problem?
-    - Clarity: Is the explanation logical and structured?
-    - Confidence: Analyze the tone and phrasing for assertiveness.
-    - Technical Depth: For technical questions, check for conceptual coverage and accuracy.
-    - Sentiment: Determine the candidate's professional mood (e.g., confident, hesitant, neutral).
-    
-    Return a detailed evaluation in JSON format.`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            relevance: { type: Type.NUMBER, description: "Score 1-10" },
-            clarity: { type: Type.NUMBER, description: "Score 1-10" },
-            confidence: { type: Type.NUMBER, description: "Score 1-10" },
-            technical_depth: { type: Type.NUMBER, description: "Score 1-10" },
-            sentiment: { type: Type.STRING },
-            overall_score: { type: Type.NUMBER, description: "Total score 1-100" },
-            feedback: { type: Type.STRING },
-            improvement_tips: { 
-              type: Type.ARRAY,
-              items: { type: Type.STRING }
-            }
-          },
-          required: ["relevance", "clarity", "confidence", "technical_depth", "overall_score", "feedback", "improvement_tips", "sentiment"]
+      const response = await ai.models.generateContent({
+        model: COMPONENT_MODEL,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              relevance: { type: Type.NUMBER },
+              clarity: { type: Type.NUMBER },
+              confidence: { type: Type.NUMBER },
+              technical_depth: { type: Type.NUMBER },
+              sentiment: { type: Type.STRING },
+              overall_score: { type: Type.NUMBER },
+              feedback: { type: Type.STRING },
+              improvement_tips: { type: Type.ARRAY, items: { type: Type.STRING } }
+            },
+            required: ["relevance", "clarity", "confidence", "technical_depth", "overall_score", "feedback", "improvement_tips", "sentiment"]
+          }
         }
-      }
-    });
+      });
 
-    // Directly access text property.
-    return JSON.parse(response.text || "{}");
+      return JSON.parse(response.text || "{}");
+    });
   },
 
   async generateSpeech(text: string): Promise<string | undefined> {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text: `Say professionally: ${text}` }] }],
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: 'Kore' },
+    try {
+      const response = await ai.models.generateContent({
+        model: TTS_MODEL,
+        contents: [{ parts: [{ text: `Say clearly: ${text}` }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Zephyr' },
+            },
           },
         },
-      },
-    });
-
-    return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      });
+      return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    } catch (err) {
+      console.warn("TTS fallback engaged");
+      return undefined;
+    }
   }
 };

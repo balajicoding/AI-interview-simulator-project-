@@ -26,6 +26,7 @@ const SessionPage: React.FC = () => {
 
   const getAudioContext = useCallback(() => {
     if (!audioContextRef.current) {
+      // Ensure strictly 24000Hz to match Gemini TTS output and prevent speed anomalies
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
     }
     return audioContextRef.current;
@@ -82,11 +83,12 @@ const SessionPage: React.FC = () => {
         source.start();
         sourceNodeRef.current = source;
       } else {
+        console.warn("AI TTS unavailable, using browser fallback.");
         setIsPreparingVoice(false);
         setIsSpeaking(true);
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = 'en-US';
-        utterance.rate = 1.0;
+        utterance.rate = 1.1; // Slightly faster fallback rate
         utterance.onend = () => setIsSpeaking(false);
         utterance.onerror = () => setIsSpeaking(false);
         window.speechSynthesis.speak(utterance);
@@ -95,11 +97,10 @@ const SessionPage: React.FC = () => {
       console.error("Speech playback error:", err);
       setIsSpeaking(false);
       setIsPreparingVoice(false);
-      showNotification("Interviewer voice failed, please read the question text.", "info");
+      showNotification("Interviewer voice failed, please read the question.", "info");
     }
   }, [getAudioContext, stopSpeaking, showNotification]);
 
-  // Mic Level Visualizer Logic
   const startMicVisualizer = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -159,7 +160,6 @@ const SessionPage: React.FC = () => {
       setIsRecording(true);
       setTranscript('');
       
-      // Start Visual Feedback
       startMicVisualizer();
       
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -170,40 +170,22 @@ const SessionPage: React.FC = () => {
         recognitionRef.current.lang = 'en-US';
 
         recognitionRef.current.onresult = (event: any) => {
-          let finalTranscript = '';
-          let interimTranscript = '';
-
-          for (let i = event.resultIndex; i < event.results.length; ++i) {
-            const transcriptSegment = event.results[i][0].transcript;
-            if (event.results[i].isFinal) {
-              finalTranscript += transcriptSegment;
-            } else {
-              interimTranscript += transcriptSegment;
-            }
+          let full = '';
+          for (let i = 0; i < event.results.length; i++) {
+             full += event.results[i][0].transcript;
           }
-
-          // Combine results more efficiently for real-time feel
-          // Use previous final segments + current interim
-          setTranscript(prev => {
-             // We recreate the whole thing from the event object for accuracy
-             let full = '';
-             for (let i = 0; i < event.results.length; i++) {
-                full += event.results[i][0].transcript;
-             }
-             return full;
-          });
+          setTranscript(full);
         };
 
         recognitionRef.current.onerror = (event: any) => {
           setIsRecording(false);
           if (event.error === 'not-allowed') {
-            showNotification("Microphone access denied. Please check your browser settings.", "error");
+            showNotification("Microphone access denied.", "error");
           } else {
-            showNotification(`Speech recognition error: ${event.error}`, "error");
+            showNotification(`Recognition error: ${event.error}`, "error");
           }
         };
 
-        // Auto-restart logic if it cuts out prematurely
         recognitionRef.current.onend = () => {
            if (isRecording) {
              try { recognitionRef.current.start(); } catch(e) {}
@@ -223,7 +205,7 @@ const SessionPage: React.FC = () => {
 
   const stopRecording = () => {
     if (recognitionRef.current) {
-      recognitionRef.current.onend = null; // Prevent auto-restart
+      recognitionRef.current.onend = null;
       recognitionRef.current.stop();
     }
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
@@ -239,8 +221,12 @@ const SessionPage: React.FC = () => {
     try {
       await submitAnswer(transcript);
       setTranscript('');
-    } catch (err) {
-      // Global Notification handles this
+    } catch (err) {}
+  };
+
+  const handleReplay = () => {
+    if (currentQuestion) {
+      speakQuestion(currentQuestion.text);
     }
   };
 
@@ -282,34 +268,47 @@ const SessionPage: React.FC = () => {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  className="absolute bottom-0 left-0 w-full h-1.5 bg-indigo-500/5 overflow-hidden"
+                  className="absolute bottom-0 left-0 w-full h-1.5 bg-indigo-500/10 overflow-hidden"
                 >
                   <motion.div 
                     initial={{ x: '-100%' }}
                     animate={{ x: '100%' }}
-                    transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+                    transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
                     className="w-1/3 h-full bg-gradient-to-r from-transparent via-indigo-500 to-transparent shadow-[0_0_15px_#6366f1]"
                   />
                 </motion.div>
               )}
             </AnimatePresence>
 
-            <motion.div 
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2, duration: 0.5 }}
-              className="inline-block px-4 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 text-[10px] font-black uppercase tracking-[0.2em] mb-8"
-            >
-              {currentQuestion?.category || 'General'} Evaluation
-            </motion.div>
+            <div className="flex items-center justify-center space-x-3 mb-8">
+              <motion.div 
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2, duration: 0.5 }}
+                className="inline-block px-4 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 text-[10px] font-black uppercase tracking-[0.2em]"
+              >
+                {currentQuestion?.category || 'General'} Evaluation
+              </motion.div>
+              
+              <button 
+                onClick={handleReplay}
+                disabled={isSpeaking || isPreparingVoice || isRecording}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-all disabled:opacity-30"
+                title="Replay Question"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                </svg>
+              </button>
+            </div>
             
             <motion.h2 
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.3, duration: 0.6, ease: "easeOut" }}
+              transition={{ delay: 0.1, duration: 0.5, ease: "easeOut" }}
               className="text-2xl md:text-4xl font-black text-slate-800 dark:text-white leading-[1.2]"
             >
-              {currentQuestion?.text || 'Finalizing question...'}
+              {currentQuestion?.text || 'Loading...'}
             </motion.h2>
             
             {(isSpeaking || isPreparingVoice) && (
@@ -322,18 +321,18 @@ const SessionPage: React.FC = () => {
                   {[...Array(5)].map((_, i) => (
                     <motion.span 
                       key={i}
-                      animate={{ height: [8, 16, 8] }}
+                      animate={{ height: isPreparingVoice ? [8, 8, 8] : [8, 16, 8] }}
                       transition={{ 
                         repeat: Infinity, 
-                        duration: 0.6, 
+                        duration: 0.5, 
                         delay: i * 0.1,
                         ease: "easeInOut"
                       }}
-                      className="w-1 bg-indigo-500 rounded-full"
+                      className={`w-1 rounded-full ${isPreparingVoice ? 'bg-slate-300 dark:bg-slate-700' : 'bg-indigo-500'}`}
                     ></motion.span>
                   ))}
                 </div>
-                <span className="text-[10px] font-black text-indigo-500/60 dark:text-indigo-400/60 uppercase tracking-widest">
+                <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">
                   {isPreparingVoice ? 'Synthesizing voice...' : 'Interviewer active'}
                 </span>
               </motion.div>
@@ -357,19 +356,18 @@ const SessionPage: React.FC = () => {
                 <div className="flex items-center space-x-2 text-rose-500 dark:text-rose-400">
                   <motion.div 
                     animate={{ scale: [1, 1.2, 1] }}
-                    transition={{ repeat: Infinity, duration: 1 }}
+                    transition={{ repeat: Infinity, duration: 0.8 }}
                     className="w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.6)]"
                   ></motion.div>
                   <span className="text-[10px] font-black uppercase tracking-[0.2em]">Voice Capture Active • {Math.floor(timer/60)}:{(timer%60).toString().padStart(2, '0')}</span>
                 </div>
                 
-                {/* Real-time Sensitivity Bar */}
                 <div className="flex items-center space-x-1 h-3">
                    {[...Array(8)].map((_, i) => (
                      <div 
                       key={i}
                       className={`w-1 rounded-full transition-all duration-75 ${
-                        micLevel > (i * 15) ? 'bg-emerald-500 h-full' : 'bg-slate-200 dark:bg-slate-700 h-1'
+                        micLevel > (i * 12) ? 'bg-emerald-500 h-full' : 'bg-slate-200 dark:bg-slate-700 h-1'
                       }`}
                      />
                    ))}

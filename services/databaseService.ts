@@ -1,16 +1,16 @@
 
 /**
  * Simulated MongoDB Service
- * Updated to handle hashed passwords and account recovery.
+ * Optimized for strict persistence using localStorage.
  */
 
 import { InterviewSession } from '../types';
 
 const STORAGE_KEYS = {
-  USER_PROFILE: 'hireai_user_profile',
-  INTERVIEW_HISTORY: 'hireai_interview_history',
+  USER_PROFILE_PREFIX: 'hireai_profile_',
+  INTERVIEW_HISTORY_PREFIX: 'hireai_history_',
   AUTH_USERS: 'hireai_auth_users',
-  CURRENT_USER: 'hireai_current_user'
+  CURRENT_USER_SESSION: 'hireai_current_session'
 };
 
 export interface UserProfile {
@@ -38,46 +38,20 @@ export const db = {
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   },
 
-  // Profile Methods
-  async getProfile(userId: string): Promise<UserProfile> {
-    const data = localStorage.getItem(`${STORAGE_KEYS.USER_PROFILE}_${userId}`);
-    return data ? JSON.parse(data) : {
-      id: userId,
-      name: 'User',
-      email: '',
-      headline: 'Candidate',
-      skills: [],
-      bio: '',
-      avatar: '👤'
-    };
-  },
-
-  async updateProfile(profile: UserProfile): Promise<UserProfile> {
-    localStorage.setItem(`${STORAGE_KEYS.USER_PROFILE}_${profile.id}`, JSON.stringify(profile));
-    return profile;
-  },
-
-  // Interview History Methods
-  async saveInterviewSession(userId: string, session: InterviewSession): Promise<void> {
-    const history = await this.getHistory(userId);
-    history.unshift(session);
-    localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_HISTORY}_${userId}`, JSON.stringify(history.slice(0, 50)));
-  },
-
-  async getHistory(userId: string): Promise<InterviewSession[]> {
-    const data = localStorage.getItem(`${STORAGE_KEYS.INTERVIEW_HISTORY}_${userId}`);
-    return data ? JSON.parse(data) : [];
-  },
-
   // Auth Methods
   async getUsers(): Promise<AuthUser[]> {
-    const data = localStorage.getItem(STORAGE_KEYS.AUTH_USERS);
-    return data ? JSON.parse(data) : [];
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.AUTH_USERS);
+      return data ? JSON.parse(data) : [];
+    } catch (e) {
+      console.error("Error reading users from storage", e);
+      return [];
+    }
   },
 
-  async saveUser(user: AuthUser) {
+  async saveUser(user: AuthUser): Promise<void> {
     const users = await this.getUsers();
-    const index = users.findIndex(u => u.email === user.email);
+    const index = users.findIndex(u => u.email.toLowerCase() === user.email.toLowerCase());
     if (index > -1) {
       users[index] = user;
     } else {
@@ -88,10 +62,59 @@ export const db = {
 
   async updatePassword(email: string, newPasswordHash: string): Promise<void> {
     const users = await this.getUsers();
-    const user = users.find(u => u.email === email);
+    const user = users.find(u => u.email.toLowerCase() === email.toLowerCase());
     if (user) {
       user.passwordHash = newPasswordHash;
       localStorage.setItem(STORAGE_KEYS.AUTH_USERS, JSON.stringify(users));
+    }
+  },
+
+  // Profile Methods
+  async getProfile(userId: string): Promise<UserProfile> {
+    try {
+      const data = localStorage.getItem(`${STORAGE_KEYS.USER_PROFILE_PREFIX}${userId}`);
+      if (data) return JSON.parse(data);
+      
+      // Fallback to searching by email if ID is inconsistent (rare)
+      const users = await this.getUsers();
+      const authUser = users.find(u => u.id === userId);
+      
+      return {
+        id: userId,
+        name: 'Candidate',
+        email: authUser?.email || '',
+        headline: 'Professional',
+        skills: [],
+        bio: '',
+        avatar: '👤'
+      };
+    } catch (e) {
+      console.error("Profile retrieval failed", e);
+      return { id: userId, name: 'User', email: '', headline: '', skills: [], bio: '', avatar: '👤' };
+    }
+  },
+
+  async updateProfile(profile: UserProfile): Promise<UserProfile> {
+    localStorage.setItem(`${STORAGE_KEYS.USER_PROFILE_PREFIX}${profile.id}`, JSON.stringify(profile));
+    return profile;
+  },
+
+  // Interview History Methods
+  async saveInterviewSession(userId: string, session: InterviewSession): Promise<void> {
+    const history = await this.getHistory(userId);
+    // Avoid duplicate saves
+    if (history.some(s => s.id === session.id)) return;
+    
+    history.unshift(session);
+    localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_HISTORY_PREFIX}${userId}`, JSON.stringify(history.slice(0, 50)));
+  },
+
+  async getHistory(userId: string): Promise<InterviewSession[]> {
+    try {
+      const data = localStorage.getItem(`${STORAGE_KEYS.INTERVIEW_HISTORY_PREFIX}${userId}`);
+      return data ? JSON.parse(data) : [];
+    } catch (e) {
+      return [];
     }
   }
 };

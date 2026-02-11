@@ -2,10 +2,34 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { InterviewConfig, Question, EvaluationResult } from "../types";
 
-// Using the high-speed Flash model for all interactive components
+// Always use process.env.API_KEY directly as a named parameter.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-const FAST_MODEL = "gemini-3-flash-preview";
+
+// Using gemini-3-flash-preview for high-speed text tasks and higher free-tier rate limits
+const COMPONENT_MODEL = "gemini-3-flash-preview";
 const TTS_MODEL = "gemini-2.5-flash-preview-tts";
+
+const MAX_RETRIES = 2;
+const INITIAL_BACKOFF = 1000; 
+
+async function withRetry<T>(fn: () => Promise<T>, retries = MAX_RETRIES, delay = INITIAL_BACKOFF): Promise<T> {
+  try {
+    return await fn();
+  } catch (error: any) {
+    const isQuotaError = 
+      error?.message?.includes('429') || 
+      error?.status === 'RESOURCE_EXHAUSTED' || 
+      (error?.message && /quota/i.test(error.message));
+    
+    // If it's a 400 or 429, and we have retries, wait and try again
+    if ((isQuotaError || error?.message?.includes('400')) && retries > 0) {
+      console.warn(`API issue encountered. Retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return withRetry(fn, retries - 1, delay * 1.5);
+    }
+    throw error;
+  }
+}
 
 export const audioUtils = {
   decodeBase64(base64: string): Uint8Array {
@@ -40,105 +64,114 @@ export const audioUtils = {
 
 export const aiService = {
   async generateQuestions(config: InterviewConfig): Promise<Question[]> {
-    const prompt = `Conduct a ${config.type} interview for ${config.role} at ${config.company} (${config.experience}, ${config.difficulty}). 
-    Generate 5 unique questions. 
-    Rule: If HR/Mixed, first is "Tell me about yourself". 
-    Role-specific, scenario-based, no generic definitions.
-    JSON format: {questions: [{text, category}]}`;
+    return withRetry(async () => {
+      const prompt = `Senior Recruiter at ${config.company}. Generate 5 interview questions for ${config.role} (${config.experience}).
+      Format: JSON {questions: [{text, category}]}.
+      Rule: First question MUST be "Tell me about yourself".
+      Be specific and professional.`;
 
-    const response = await ai.models.generateContent({
-      model: FAST_MODEL,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            questions: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  text: { type: Type.STRING },
-                  category: { type: Type.STRING, enum: ["HR", "Technical"] }
-                },
-                required: ["text", "category"]
+      const response = await ai.models.generateContent({
+        model: COMPONENT_MODEL,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              questions: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    text: { type: Type.STRING },
+                    category: { type: Type.STRING, enum: ["HR", "Technical"] }
+                  },
+                  required: ["text", "category"]
+                }
               }
-            }
-          },
-          required: ["questions"]
+            },
+            required: ["questions"]
+          }
         }
-      }
-    });
+      });
 
-    const data = JSON.parse(response.text || '{"questions": []}');
-    return data.questions.map((q: any, index: number) => ({
-      id: index + 1,
-      text: q.text,
-      category: q.category
-    }));
+      const data = JSON.parse(response.text || '{"questions": []}');
+      return data.questions.map((q: any, index: number) => ({
+        id: index + 1,
+        text: q.text,
+        category: q.category
+      }));
+    });
   },
 
   async evaluateAnswer(question: string, answer: string, config: InterviewConfig): Promise<EvaluationResult> {
-    const prompt = `Fast Evaluate for ${config.company}:
-    Q: "${question}"
-    A: "${answer}"
-    Metrics 1-10: relevance, clarity, confidence, technical_depth. Overall 1-100.
-    Sentiment: 1 word. Concise feedback & 3 tips. JSON format.`;
+    return withRetry(async () => {
+      const prompt = `Evaluate response for ${config.role} at ${config.company}:
+      Q: "${question}"
+      A: "${answer}"
+      Provide scores 1-10 for relevance, clarity, confidence, technical_depth. Overall 1-100.
+      Professional feedback and 3 improvement tips. Return JSON.`;
 
-    const response = await ai.models.generateContent({
-      model: FAST_MODEL,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            relevance: { type: Type.NUMBER },
-            clarity: { type: Type.NUMBER },
-            confidence: { type: Type.NUMBER },
-            technical_depth: { type: Type.NUMBER },
-            sentiment: { type: Type.STRING },
-            overall_score: { type: Type.NUMBER },
-            feedback: { type: Type.STRING },
-            improvement_tips: { type: Type.ARRAY, items: { type: Type.STRING } }
-          },
-          required: ["relevance", "clarity", "confidence", "technical_depth", "overall_score", "feedback", "improvement_tips", "sentiment"]
+      const response = await ai.models.generateContent({
+        model: COMPONENT_MODEL,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              relevance: { type: Type.NUMBER },
+              clarity: { type: Type.NUMBER },
+              confidence: { type: Type.NUMBER },
+              technical_depth: { type: Type.NUMBER },
+              sentiment: { type: Type.STRING },
+              overall_score: { type: Type.NUMBER },
+              feedback: { type: Type.STRING },
+              improvement_tips: { type: Type.ARRAY, items: { type: Type.STRING } }
+            },
+            required: ["relevance", "clarity", "confidence", "technical_depth", "overall_score", "feedback", "improvement_tips", "sentiment"]
+          }
         }
-      }
-    });
+      });
 
-    return JSON.parse(response.text || "{}");
+      return JSON.parse(response.text || "{}");
+    });
   },
 
   async generateSpeech(text: string): Promise<string | undefined> {
     try {
+      // Use zero retries for speech to ensure instant fallback if API is busy
       const response = await ai.models.generateContent({
         model: TTS_MODEL,
-        contents: [{ parts: [{ text: `${text}` }] }],
+        // Using a standard "Say [emotion]: [text]" pattern which is most reliable for the TTS model
+        contents: [{ parts: [{ text: `Say clearly: ${text}` }] }],
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
             voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: 'Kore' },
+              prebuiltVoiceConfig: { voiceName: 'Zephyr' },
             },
           },
         },
       });
       return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    } catch (err) {
+    } catch (err: any) {
+      console.error("Cloud TTS Unavailable:", err?.message || "Quota/Format Error");
+      // Returning undefined triggers browser fallback in SessionPage.tsx
       return undefined;
     }
   },
 
   async chatWithAI(message: string, history: any[]): Promise<string> {
-    const response = await ai.models.generateContent({
-      model: FAST_MODEL,
-      contents: [...history, { role: 'user', parts: [{ text: message }] }],
-      config: {
-        systemInstruction: 'You are an AI Interview Coach. Concise, professional, helpful.',
-      }
+    return withRetry(async () => {
+      const response = await ai.models.generateContent({
+        model: COMPONENT_MODEL,
+        contents: [...history, { role: 'user', parts: [{ text: message }] }],
+        config: {
+          systemInstruction: 'You are an AI Interview Coach. Give fast, short, professional advice.',
+        }
+      });
+      return response.text || "I'm sorry, I couldn't process that.";
     });
-    return response.text || "I'm sorry, I couldn't process that.";
   }
 };

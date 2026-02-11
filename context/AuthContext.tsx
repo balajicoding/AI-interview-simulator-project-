@@ -15,37 +15,50 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const SESSION_KEY = 'hireai_current_session';
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const { showNotification } = useNotification();
 
+  // Load session on mount
   useEffect(() => {
-    const savedUser = localStorage.getItem('hireai_current_user');
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
-    }
-    setLoading(false);
+    const initAuth = async () => {
+      const savedSession = localStorage.getItem(SESSION_KEY);
+      if (savedSession) {
+        try {
+          const sessionData = JSON.parse(savedSession);
+          // Re-verify profile with "DB" to ensure data consistency
+          const freshProfile = await db.getProfile(sessionData.id);
+          setUser(freshProfile);
+        } catch (e) {
+          localStorage.removeItem(SESSION_KEY);
+        }
+      }
+      setLoading(false);
+    };
+    initAuth();
   }, []);
 
   const login = async (email: string, password: string) => {
     setLoading(true);
     try {
       const users = await db.getUsers();
-      const found = users.find((u) => u.email === email);
+      const found = users.find((u) => u.email.toLowerCase() === email.toLowerCase());
       
       if (!found) {
-        throw new Error("No account found with this email.");
+        throw new Error("No account found with this email. Please sign up.");
       }
 
       const hash = await db.hashPassword(password);
       if (hash !== found.passwordHash) {
-        throw new Error("Invalid password. Please try again.");
+        throw new Error("Invalid password. Please check your credentials.");
       }
 
       const profile = await db.getProfile(found.id);
       setUser(profile);
-      localStorage.setItem('hireai_current_user', JSON.stringify(profile));
+      localStorage.setItem(SESSION_KEY, JSON.stringify(profile));
       showNotification(`Welcome back, ${profile.name}!`, 'success');
     } catch (err: any) {
       showNotification(err.message, 'error');
@@ -59,29 +72,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLoading(true);
     try {
       const users = await db.getUsers();
-      if (users.some((u) => u.email === email)) {
-        throw new Error("Email already registered.");
+      if (users.some((u) => u.email.toLowerCase() === email.toLowerCase())) {
+        throw new Error("This email is already registered. Try signing in.");
       }
 
       const id = Date.now().toString();
       const passwordHash = await db.hashPassword(password);
       
+      // 1. Save Credentials
       await db.saveUser({ id, email, passwordHash });
 
+      // 2. Create and Save Profile
       const initialProfile: UserProfile = {
         id,
         name,
         email,
-        headline: 'New Candidate',
+        headline: 'Professional Candidate',
         skills: [],
         bio: '',
         avatar: '👤'
       };
       
       await db.updateProfile(initialProfile);
+
+      // 3. Establish Session
       setUser(initialProfile);
-      localStorage.setItem('hireai_current_user', JSON.stringify(initialProfile));
-      showNotification("Account created successfully!", "success");
+      localStorage.setItem(SESSION_KEY, JSON.stringify(initialProfile));
+      
+      showNotification("Account created! Welcome to HireAI.", "success");
     } catch (err: any) {
       showNotification(err.message, 'error');
       throw err;
@@ -94,23 +112,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const newHash = await db.hashPassword(newPassword);
       await db.updatePassword(email, newHash);
-      showNotification("Password reset successful.", "success");
+      showNotification("Password updated! You can now log in with your new password.", "success");
     } catch (err: any) {
-      showNotification("Failed to reset password.", "error");
+      showNotification("Failed to reset password. Please try again.", "error");
     }
   };
 
   const logout = () => {
     setUser(null);
-    localStorage.removeItem('hireai_current_user');
-    showNotification("Signed out successfully.", "info");
+    localStorage.removeItem(SESSION_KEY);
+    showNotification("You have been signed out.", "info");
   };
 
   const refreshProfile = async () => {
     if (user) {
       const updated = await db.getProfile(user.id);
       setUser(updated);
-      localStorage.setItem('hireai_current_user', JSON.stringify(updated));
+      localStorage.setItem(SESSION_KEY, JSON.stringify(updated));
     }
   };
 
