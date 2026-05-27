@@ -57,9 +57,6 @@ Start the development server:
 npm run dev
 📸 Screenshots
 
-Add your project screenshots here.
-
-
 🔮 Future Enhancements
 Voice-based interview interaction
 AI facial expression analysis
