@@ -59,9 +59,7 @@ npm run dev
 
 Add your project screenshots here.
 
-![Home Page]("C:\Users\jagat\Pictures\Screenshots\homepage.png")
-![Interview Page](./screenshots/interview.png)
-![Feedback Page](./screenshots/feedback.png)
+
 🔮 Future Enhancements
 Voice-based interview interaction
 AI facial expression analysis
