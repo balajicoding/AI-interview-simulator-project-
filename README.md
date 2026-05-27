@@ -59,7 +59,7 @@ npm run dev
 
 Add your project screenshots here.
 
-![Home Page](./screenshots/home.png)
+![Home Page]("C:\Users\jagat\Pictures\Screenshots\homepage.png")
 ![Interview Page](./screenshots/interview.png)
 ![Feedback Page](./screenshots/feedback.png)
 🔮 Future Enhancements
